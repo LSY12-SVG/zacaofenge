@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Local IDE / app artifacts
+.trae/
+
+# Datasets (too large for git repo)
+Tobacco Aerial Dataset/
+Combined_Dataset/
+CoFly-WeedDB/
+
+# Model checkpoints / weights
+*.pth
+*.pt
+*.ckpt
+models/*.pth
+
+# Large generated visual outputs
+results/*.png
+*.png
+
+# OS
+Desktop.ini
+Thumbs.db

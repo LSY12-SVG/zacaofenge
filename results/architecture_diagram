@@ -1,0 +1,63 @@
+// Rice Detection Architecture
+digraph {
+	compound=true nodesep=0.6 rankdir=LR ranksep=0.8 splines=ortho
+	node [fontname=Arial fontsize=12 margin="0.1,0.1" shape=rect style="rounded,filled"]
+	edge [arrowsize=0.7 fontname=Arial fontsize=10 penwidth=1.2]
+	subgraph cluster_0 {
+		color=gray label="Backbone & Attention" style=dashed
+		subgraph cluster_p2 {
+			label="" style=invis
+			P2 [label="Stage 2
+FasterNet" fillcolor="#E6F3FF"]
+			Attn_P2 [label=ECA fillcolor="#FFF2CC" shape=component]
+			P2 -> Attn_P2 [style=invis]
+		}
+		subgraph cluster_p3 {
+			label="" style=invis
+			P3 [label="Stage 3
+FasterNet" fillcolor="#E6F3FF"]
+			Attn_P3 [label=CA fillcolor="#FFF2CC" shape=component]
+		}
+		subgraph cluster_p4 {
+			label="" style=invis
+			P4 [label="Stage 4
+FasterNet" fillcolor="#E6F3FF"]
+			Attn_P4 [label=ECA fillcolor="#FFF2CC" shape=component]
+		}
+		P2 -> P3
+		P3 -> P4
+		P2 -> Attn_P2 [dir=none penwidth=2]
+		P3 -> Attn_P3 [dir=none penwidth=2]
+		P4 -> Attn_P4 [dir=none penwidth=2]
+	}
+	subgraph cluster_neck {
+		color=gray label="Neck: RiceYOLONeck (FPN+PAN)" style=dashed
+		SPPF [label=SPPF fillcolor="#E2F0D9" shape=octagon]
+		N_P3_TD [label="Fusion P3
+(Top-Down)" fillcolor="#E2F0D9"]
+		N_P2_Out [label="Out P2" fillcolor="#E2F0D9" penwidth=2]
+		N_P3_Out [label="Out P3" fillcolor="#E2F0D9" penwidth=2]
+		N_P4_Out [label="Out P4" fillcolor="#E2F0D9" penwidth=2]
+		SPPF -> N_P3_TD [label=Up]
+		N_P3_TD -> N_P2_Out [label=Up]
+		N_P2_Out -> N_P3_Out [label=Down]
+		N_P3_TD -> N_P3_Out [constraint=false style=dashed]
+		N_P3_Out -> N_P4_Out [label=Down]
+		SPPF -> N_P4_Out [constraint=false style=dashed]
+	}
+	subgraph cluster_head {
+		color=gray label="Decoupled Heads" style=dashed
+		H_P2 [label="Head P2
+Cls + Reg" fillcolor="#FCE4D6"]
+		H_P3 [label="Head P3
+Cls + Reg" fillcolor="#FCE4D6"]
+		H_P4 [label="Head P4
+Cls + Reg" fillcolor="#FCE4D6"]
+	}
+	Attn_P4 -> SPPF
+	Attn_P3 -> N_P3_TD
+	Attn_P2 -> N_P2_Out
+	N_P2_Out -> H_P2
+	N_P3_Out -> H_P3
+	N_P4_Out -> H_P4
+}

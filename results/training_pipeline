@@ -1,0 +1,49 @@
+// Training Pipeline Overview
+digraph {
+	compound=true nodesep=0.6 rankdir=LR ranksep=0.8 splines=ortho
+	node [fontname=Arial fontsize=12 margin="0.15,0.1" shape=rect style="rounded,filled"]
+	edge [arrowsize=0.7 fontname=Arial fontsize=10 penwidth=1.2]
+	subgraph cluster_data {
+		color=gray label="Data Preparation" style=dashed
+		Dataset [label="Dataset
+(YOLO Format)" fillcolor="#E6F3FF" shape=folder]
+		Augment [label=<
+            <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
+            <TR><TD><B>Albumentations</B></TD></TR>
+            <TR><TD ALIGN="LEFT">- Rotate / Flip</TD></TR>
+            <TR><TD ALIGN="LEFT">- Affine / RandomCrop</TD></TR>
+            <TR><TD ALIGN="LEFT">- Brightness / Contrast</TD></TR>
+            <TR><TD ALIGN="LEFT">- Normalize</TD></TR>
+            </TABLE>
+        > fillcolor="#E6F3FF" shape=component]
+		Dataset -> Augment [label=Load]
+	}
+	subgraph cluster_train {
+		color=gray label="Training Loop" style=dashed
+		Model [label="RiceYOLOv8s
+(Custom Model)" fillcolor="#FFF2CC" shape=box3d]
+		subgraph cluster_opt {
+			label="" style=invis
+			Optimizer [label="AdamW
+Optimizer" fillcolor="#E2F0D9"]
+			Scheduler [label="CosineAnnealingLR
+Scheduler" fillcolor="#E2F0D9"]
+			Scheduler -> Optimizer [label="Adjust LR"]
+		}
+		Optimizer -> Model [label="Update Weights"]
+		Model -> Optimizer [label=Gradients dir=back]
+	}
+	subgraph cluster_ops {
+		color=gray label="Monitoring & Artifacts" style=dashed
+		MLflow [label="MLflow Tracking
+(Real-time)" fillcolor="#FCE4D6" shape=note]
+		Checkpoints [label="Checkpoints
+(.pt files)" fillcolor="#E1E1E1" shape=cylinder]
+		Curves [label="Training Curves
+(Loss/Metrics)" fillcolor="#E1E1E1" shape=note]
+		MLflow -> Curves [style=dashed]
+	}
+	Augment -> Model [label="Batch (B, C, H, W)"]
+	Model -> MLflow [label="Log Metrics"]
+	Model -> Checkpoints [label="Save Best"]
+}

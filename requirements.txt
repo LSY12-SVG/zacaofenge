@@ -1,0 +1,24 @@
+# SRDNet: Structure Residual Decoupling Network
+# 依赖文件
+
+# 核心依赖
+torch>=1.9.0
+torchvision>=0.10.0
+
+# 分割模型库 (可选，用于对比实验)
+segmentation-models-pytorch>=0.3.0
+
+# 数据增强
+albumentations>=1.0.0
+
+# SRDNet 新增依赖
+timm>=0.6.0  # ConvNeXt backbone
+
+# 训练工具
+tqdm>=4.60.0
+numpy>=1.19.0
+opencv-python>=4.5.0
+Pillow>=8.0.0
+
+# 可视化 (可选)
+matplotlib>=3.3.0

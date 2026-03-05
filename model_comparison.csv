@@ -1,0 +1,5 @@
+Model,mIoU,FPS,Backbone
+Full (Small Data),0.2501,118.1,efficientnet-b4
+ResNet34 (Small Data),0.2538,557.8,resnet34
+No Aug (Small Data),0.2536,269.2,efficientnet-b4
+Full (Expanded Data),0.6018,692.4,efficientnet-b4
