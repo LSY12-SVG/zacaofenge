@@ -74,6 +74,9 @@ class SRDNet(nn.Module):
         out_channels = backbone_features[-1]  # 最后一层输出通道 (768 for ConvNeXt-Tiny)
         print(f"Backbone output channels (highest level): {out_channels}")
         print(f"Multi-scale features: {backbone_features}")
+        if len(backbone_features) >= 4:
+            c2, c3, c4, c5 = backbone_features[0], backbone_features[1], backbone_features[2], backbone_features[3]
+            print(f"C2/C3/C4/C5 channels: {c2}/{c3}/{c4}/{c5}")
         
         # 2. Crop Structure Head (结构先验建模) - 输出 mask 和 feature
         self.crop_head = CropStructureHead(

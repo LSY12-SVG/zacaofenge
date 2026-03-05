@@ -1,59 +1,78 @@
-import os
 import argparse
-from pathlib import Path
+import csv
+import os
+import random
 
+import cv2
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import segmentation_models_pytorch as smp
 
 from dataset import WeedDataset
-from hfa_model import HFANet
-from loss import SRDNetLoss, HFACombinedLoss
+from loss import HFACombinedLoss, SRDNetLoss, mask_to_edge
+from model import UNet
+from models.research_hfa import ResearchHFANet
 from models.srdnet import SRDNet
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def calculate_iou(logits, true_mask, num_classes=3):
     pred = torch.argmax(logits, dim=1)
-
     iou_per_class = []
     for cls in range(num_classes):
-        pred_inds = (pred == cls)
-        target_inds = (true_mask == cls)
+        pred_inds = pred == cls
+        target_inds = true_mask == cls
         intersection = (pred_inds & target_inds).sum().float()
         union = (pred_inds | target_inds).sum().float()
         if union == 0:
             iou_per_class.append(float("nan"))
         else:
             iou_per_class.append((intersection / union).item())
-
     return float(np.nanmean(iou_per_class)), iou_per_class
 
 
+def calculate_weed_recall(logits, true_mask, weed_cls=2):
+    pred = torch.argmax(logits, dim=1)
+    tp = ((pred == weed_cls) & (true_mask == weed_cls)).sum().float()
+    fn = ((pred != weed_cls) & (true_mask == weed_cls)).sum().float()
+    denom = tp + fn
+    if denom <= 0:
+        return float("nan")
+    return float((tp / denom).item())
+
+
+def calculate_boundary_f1(logits, true_mask, radius=1):
+    pred = torch.argmax(logits, dim=1)
+    pred_edge = mask_to_edge(pred, radius=radius)
+    gt_edge = mask_to_edge(true_mask, radius=radius)
+    tp = (pred_edge * gt_edge).sum().float()
+    fp = (pred_edge * (1.0 - gt_edge)).sum().float()
+    fn = ((1.0 - pred_edge) * gt_edge).sum().float()
+    precision = tp / (tp + fp + 1e-6)
+    recall = tp / (tp + fn + 1e-6)
+    f1 = 2 * precision * recall / (precision + recall + 1e-6)
+    return float(f1.item())
+
+
 def strong_tensor_augment(x: torch.Tensor) -> torch.Tensor:
-    """
-    用于一致性正则的轻量"第二视图"增强（不依赖额外库）
-    - random flip
-    - gaussian noise
-    - brightness jitter (tensor space)
-    """
     y = x
     if torch.rand(1).item() < 0.5:
         y = torch.flip(y, dims=[3])
     if torch.rand(1).item() < 0.2:
         y = torch.flip(y, dims=[2])
-
-    # brightness jitter
     if torch.rand(1).item() < 0.7:
-        b = (torch.rand(1, device=y.device) * 0.2 - 0.1).item()
-        y = y + b
-
-    # noise
+        y = y + (torch.rand(1, device=y.device) * 0.2 - 0.1).item()
     if torch.rand(1).item() < 0.7:
         y = y + torch.randn_like(y) * 0.03
-
     return y.clamp(-5, 5)
 
 
@@ -72,53 +91,166 @@ def load_checkpoint(path, model, optimizer=None, scheduler=None, device="cpu"):
     ckpt = torch.load(path, map_location=device)
     if isinstance(ckpt, dict) and "model" in ckpt:
         model.load_state_dict(ckpt["model"])
-        if optimizer is not None and "optimizer" in ckpt and ckpt["optimizer"] is not None:
+        if optimizer is not None and ckpt.get("optimizer") is not None:
             optimizer.load_state_dict(ckpt["optimizer"])
-        if scheduler is not None and "scheduler" in ckpt and ckpt["scheduler"] is not None:
+        if scheduler is not None and ckpt.get("scheduler") is not None:
             scheduler.load_state_dict(ckpt["scheduler"])
         start_epoch = int(ckpt.get("epoch", -1)) + 1
         best_iou = float(ckpt.get("best_iou", 0.0))
         return start_epoch, best_iou
-    else:
-        # 兼容旧版只存 state_dict
-        model.load_state_dict(ckpt)
-        return 0, 0.0
+    model.load_state_dict(ckpt)
+    return 0, 0.0
+
+
+def ensure_csv_header(path):
+    header = [
+        "epoch",
+        "train_loss",
+        "val_loss",
+        "val_miou",
+        "iou_bg",
+        "iou_crop",
+        "iou_weed",
+        "weed_recall",
+        "boundary_f1",
+        "lr",
+        "cons_weight",
+        "fac_avg_fg_ratio",
+        "fac_avg_attempts",
+        "fac_samples",
+    ]
+    if not os.path.exists(path):
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow(header)
+
+
+def append_epoch_metrics(path, row):
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(row)
+
+
+def dump_config(path, cfg):
+    try:
+        import yaml
+
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+    except Exception:
+        with open(path, "w", encoding="utf-8") as f:
+            import json
+
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def colorize_mask(mask: np.ndarray) -> np.ndarray:
+    palette = np.array([[0, 0, 0], [0, 200, 0], [220, 0, 0]], dtype=np.uint8)
+    mask = np.clip(mask, 0, 2).astype(np.int64)
+    return palette[mask]
+
+
+def denorm_image(img_t: torch.Tensor) -> np.ndarray:
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    img = img_t.detach().cpu().numpy().transpose(1, 2, 0)
+    img = img * std + mean
+    img = np.clip(img, 0.0, 1.0)
+    return (img * 255).astype(np.uint8)
+
+
+def model_forward(model, images, arch):
+    out = model(images)
+    if arch == "hfa":
+        logits, edge_logits = out
+        return logits, edge_logits, out
+    return out, None, out
+
+
+def save_prediction_visuals(model, val_set, device, arch, out_dir, epoch, num_samples=4):
+    os.makedirs(out_dir, exist_ok=True)
+    model.eval()
+    max_n = min(num_samples, len(val_set))
+    with torch.no_grad():
+        for i in range(max_n):
+            image, mask = val_set[i]
+            x = image.unsqueeze(0).to(device)
+            logits, _, _ = model_forward(model, x, arch)
+            pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
+            gt = mask.cpu().numpy().astype(np.uint8)
+            vis_img = denorm_image(image)
+            vis_gt = colorize_mask(gt)
+            vis_pred = colorize_mask(pred)
+            canvas = np.concatenate([vis_img, vis_gt, vis_pred], axis=1)
+            save_path = os.path.join(out_dir, f"epoch_{epoch:03d}_sample_{i:02d}.png")
+            cv2.imwrite(save_path, cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR))
 
 
 def main():
-    parser = argparse.ArgumentParser("Train segmentation model (HFA-Net / SRDNet)")
+    parser = argparse.ArgumentParser("Train research-ready segmentation models")
     parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--model", type=str, default="hfanet", choices=["hfanet", "srdnet"])
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument(
+        "--arch",
+        type=str,
+        default="hfa",
+        choices=["fpn", "hfa", "srdnet", "unet", "deeplabv3plus", "segformerb0"],
+    )
+    parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--backbone", type=str, default="convnext_tiny")
-    parser.add_argument("--save_name", type=str, default="hfanet_best.pth")
-    parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--no_pretrained", action="store_true")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--num_workers", type=int, default=0)
 
-    # default FAC params
+    parser.add_argument("--run_dir", type=str, default="")
+    parser.add_argument("--save_name", type=str, default="best.ckpt")
+    parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--metrics_csv", type=str, default="")
+    parser.add_argument("--estimate_fps", action="store_true")
+
     parser.add_argument("--crop_size", type=int, default=512)
     parser.add_argument("--fg_prob", type=float, default=0.7)
     parser.add_argument("--no_fac", action="store_true")
     parser.add_argument("--class_stat_mode", type=str, default="random", choices=["random", "full", "none"])
     parser.add_argument("--class_stat_samples", type=int, default=500)
+    parser.add_argument("--max_fac_tries", type=int, default=3)
 
-    # loss weights
+    parser.add_argument("--dsdf_mode", type=str, default="feature", choices=["none", "logits", "feature"])
+    parser.add_argument("--dsdf_levels", type=str, default="p2p3", choices=["p2", "p2p3"])
+    parser.add_argument("--fpn_channels", type=int, default=128)
+
     parser.add_argument("--dice_weight", type=float, default=1.0)
     parser.add_argument("--focal_weight", type=float, default=1.0)
-    parser.add_argument("--boundary_weight", type=float, default=0.0)  # 默认 0，避免 boundary_loss 缺失
+    parser.add_argument("--boundary_weight", type=float, default=0.5)
     parser.add_argument("--edge_weight", type=float, default=0.5)
     parser.add_argument("--cons_weight", type=float, default=0.1)
+    parser.add_argument("--cons_warmup_epochs", type=int, default=10)
+    parser.add_argument("--bf_radius", type=int, default=1)
 
-    # aug
-    parser.add_argument("--no-aug", action="store_true")
-
+    parser.add_argument("--no_aug", action="store_true")
+    parser.add_argument("--vis_every", type=int, default=10)
+    parser.add_argument("--vis_samples", type=int, default=4)
     args = parser.parse_args()
+
+    set_seed(args.seed)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    # dataset
+    run_dir = args.run_dir.strip()
+    if run_dir:
+        os.makedirs(run_dir, exist_ok=True)
+        os.makedirs(os.path.join(run_dir, "pred_vis"), exist_ok=True)
+        checkpoint_path = os.path.join(run_dir, "best.ckpt")
+        metrics_csv = args.metrics_csv or os.path.join(run_dir, "metrics.csv")
+        config_path = os.path.join(run_dir, "config.yaml")
+        dump_config(config_path, vars(args))
+    else:
+        checkpoint_path = args.save_name
+        metrics_csv = args.metrics_csv or "results/training_metrics.csv"
+
+    os.makedirs(os.path.dirname(metrics_csv) or ".", exist_ok=True)
+    ensure_csv_header(metrics_csv)
+
     train_set = WeedDataset(
         args.data_dir,
         mode="train",
@@ -129,6 +261,7 @@ def main():
         enable_fac=(not args.no_fac),
         class_stat_mode=args.class_stat_mode,
         class_stat_samples=args.class_stat_samples,
+        max_fac_tries=args.max_fac_tries,
     )
     val_set = WeedDataset(
         args.data_dir,
@@ -140,44 +273,82 @@ def main():
         enable_fac=False,
         class_stat_mode="none",
         class_stat_samples=args.class_stat_samples,
+        max_fac_tries=args.max_fac_tries,
     )
 
     print(f"Training on {len(train_set)} samples, validating on {len(val_set)} samples")
     print(f"FAC enabled: {not args.no_fac}, Augmentation enabled: {not args.no_aug}")
 
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=0)
+    train_loader = DataLoader(
+        train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers
+    )
+    val_loader = DataLoader(
+        val_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
+    )
 
-    # model
-    if args.model == "hfanet":
-        model = HFANet(n_classes=3, backbone=args.backbone, pretrained=True).to(device)
+    pretrained = not args.no_pretrained
+    if args.arch in ["fpn", "hfa"]:
+        model = ResearchHFANet(
+            n_classes=3,
+            backbone=args.backbone,
+            pretrained=pretrained,
+            arch=args.arch,
+            dsdf_mode=args.dsdf_mode,
+            dsdf_levels=args.dsdf_levels,
+            fpn_channels=args.fpn_channels,
+        ).to(device)
+    elif args.arch == "srdnet":
+        model = SRDNet(n_classes=3, backbone=args.backbone, pretrained=pretrained).to(device)
+    elif args.arch == "deeplabv3plus":
+        model = smp.DeepLabV3Plus(
+            encoder_name=args.backbone,
+            encoder_weights="imagenet" if pretrained else None,
+            in_channels=3,
+            classes=3,
+        ).to(device)
+    elif args.arch == "segformerb0":
+        model = smp.Segformer(
+            encoder_name="mit_b0",
+            encoder_weights="imagenet" if pretrained else None,
+            in_channels=3,
+            classes=3,
+        ).to(device)
     else:
-        model = SRDNet(n_classes=3, backbone=args.backbone, pretrained=True).to(device)
-    print(f"Model: {args.model}, Backbone: {args.backbone}")
+        model = UNet(n_channels=3, n_classes=3).to(device)
 
-    # optimizer / scheduler
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Model: {args.arch}, Backbone: {args.backbone}, Params: {total_params / 1e6:.2f}M")
+
+    fps = None
+    if args.estimate_fps and hasattr(model, "estimate_fps"):
+        fps = model.estimate_fps(device=device)
+        print(f"Estimated FPS: {fps:.2f}")
+
+    if run_dir:
+        meta = {"params_million": round(total_params / 1e6, 4), "fps": fps if fps is not None else ""}
+        dump_config(os.path.join(run_dir, "model_meta.yaml"), meta)
+
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
 
-    # loss
     seg_loss = SRDNetLoss(
         lambda_dice=args.dice_weight,
         lambda_focal=args.focal_weight,
-        lambda_boundary=args.boundary_weight
+        lambda_boundary=args.boundary_weight,
     )
-    if args.model == "hfanet":
+
+    if args.arch == "hfa":
         criterion = HFACombinedLoss(
             seg_loss=seg_loss,
             edge_weight=args.edge_weight,
             cons_weight=args.cons_weight,
-            edge_radius=1
+            edge_radius=1,
         )
     else:
         criterion = seg_loss
         if args.edge_weight > 0 or args.cons_weight > 0:
-            print("Note: edge_weight/cons_weight are only used by hfanet and will be ignored for srdnet.")
+            print("Note: edge_weight/cons_weight are only active for arch=hfa.")
 
-    # resume
     start_epoch = 0
     best_iou = 0.0
     if args.resume and os.path.exists(args.resume):
@@ -185,35 +356,37 @@ def main():
         start_epoch, best_iou = load_checkpoint(args.resume, model, optimizer, scheduler, device=device)
         print(f"Resume start_epoch={start_epoch}, best_iou={best_iou:.4f}")
 
-    # training loop
     for epoch in range(start_epoch, args.epochs):
-        train_set.set_epoch(epoch)
+        if hasattr(train_set, "set_epoch"):
+            train_set.set_epoch(epoch)
 
         model.train()
         running = 0.0
-
+        active_cons_weight = 0.0
         pbar = tqdm(total=len(train_set), desc=f"Epoch {epoch+1}/{args.epochs}", unit="img")
+
         for images, masks in train_loader:
             images = images.to(device)
             masks = masks.to(device)
 
             optimizer.zero_grad(set_to_none=True)
 
-            # forward
-            out = model(images)
+            logits, edge_logits, out = model_forward(model, images, args.arch)
 
-            # second view for consistency
             out_aug = None
-            if args.model == "hfanet" and args.cons_weight > 0:
-                images2 = strong_tensor_augment(images)
-                out_aug = model(images2)
+            if args.arch == "hfa":
+                active_cons_weight = args.cons_weight if epoch >= args.cons_warmup_epochs else 0.0
+                criterion.cons_weight = active_cons_weight
+                if active_cons_weight > 0:
+                    images2 = strong_tensor_augment(images)
+                    logits2, edge_logits2, out2 = model_forward(model, images2, args.arch)
+                    out_aug = (logits2, edge_logits2)
 
-            if args.model == "hfanet":
-                loss = criterion(out, masks, out_aug=out_aug)
-                logits = out[0]
+            if args.arch == "hfa":
+                loss = criterion((logits, edge_logits), masks, out_aug=out_aug)
             else:
-                loss = criterion(out, masks)
-                logits = out
+                loss = criterion(logits, masks)
+
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -223,11 +396,12 @@ def main():
             pbar.set_postfix(loss=float(loss.item()), lr=float(optimizer.param_groups[0]["lr"]))
         pbar.close()
 
-        # validation
         model.eval()
         val_loss = 0.0
         val_iou = 0.0
-
+        weed_recall_sum = 0.0
+        weed_recall_cnt = 0
+        bf1_sum = 0.0
         per_sum = [0.0, 0.0, 0.0]
         per_cnt = [0, 0, 0]
 
@@ -236,37 +410,94 @@ def main():
                 images = images.to(device)
                 masks = masks.to(device)
 
-                if args.model == "hfanet":
-                    logits, edge_logits = model(images)
+                logits, edge_logits, _ = model_forward(model, images, args.arch)
+
+                if args.arch == "hfa":
                     loss = criterion((logits, edge_logits), masks, out_aug=None)
                 else:
-                    logits = model(images)
                     loss = criterion(logits, masks)
                 val_loss += loss.item()
 
                 miou, per = calculate_iou(logits, masks, num_classes=3)
                 val_iou += miou
+                wr = calculate_weed_recall(logits, masks)
+                if not np.isnan(wr):
+                    weed_recall_sum += wr
+                    weed_recall_cnt += 1
+                bf1_sum += calculate_boundary_f1(logits, masks, radius=args.bf_radius)
+
                 for i in range(3):
                     if not np.isnan(per[i]):
                         per_sum[i] += per[i]
                         per_cnt[i] += 1
 
+        train_loss = running / max(len(train_loader), 1)
         val_loss /= max(len(val_loader), 1)
         val_iou /= max(len(val_loader), 1)
         per_iou = [per_sum[i] / max(per_cnt[i], 1) for i in range(3)]
+        weed_recall = weed_recall_sum / max(weed_recall_cnt, 1)
+        boundary_f1 = bf1_sum / max(len(val_loader), 1)
+        fac_stats = (
+            train_set.get_epoch_stats() if hasattr(train_set, "get_epoch_stats") else {
+                "fac_avg_fg_ratio": 0.0,
+                "fac_avg_attempts": 0.0,
+                "fac_samples": 0,
+            }
+        )
+        lr_now = float(optimizer.param_groups[0]["lr"])
 
+        print(f"Train Loss: {train_loss:.4f}")
         print(f"Validation Loss: {val_loss:.4f}, mIoU: {val_iou:.4f}")
         print(f"  - Background IoU: {per_iou[0]:.4f}")
         print(f"  - Crop IoU:       {per_iou[1]:.4f}")
         print(f"  - Weed IoU:       {per_iou[2]:.4f}")
+        print(f"  - Weed Recall:    {weed_recall:.4f}")
+        print(f"  - Boundary F1:    {boundary_f1:.4f}")
+        print(f"  - LR:             {lr_now:.6g}")
+        if args.arch == "hfa":
+            print(f"  - Cons Weight:    {active_cons_weight:.4f}")
+        print(
+            f"  - FAC avg_fg:     {fac_stats['fac_avg_fg_ratio']:.4f}, "
+            f"avg_try: {fac_stats['fac_avg_attempts']:.2f}, samples: {fac_stats['fac_samples']}"
+        )
+
+        append_epoch_metrics(
+            metrics_csv,
+            [
+                epoch + 1,
+                f"{train_loss:.6f}",
+                f"{val_loss:.6f}",
+                f"{val_iou:.6f}",
+                f"{per_iou[0]:.6f}",
+                f"{per_iou[1]:.6f}",
+                f"{per_iou[2]:.6f}",
+                f"{weed_recall:.6f}",
+                f"{boundary_f1:.6f}",
+                f"{lr_now:.8f}",
+                f"{active_cons_weight:.6f}",
+                f"{fac_stats['fac_avg_fg_ratio']:.6f}",
+                f"{fac_stats['fac_avg_attempts']:.6f}",
+                fac_stats["fac_samples"],
+            ],
+        )
+
+        if args.vis_every > 0 and run_dir and (((epoch + 1) % args.vis_every == 0) or (epoch + 1 == args.epochs)):
+            save_prediction_visuals(
+                model=model,
+                val_set=val_set,
+                device=device,
+                arch=args.arch,
+                out_dir=os.path.join(run_dir, "pred_vis"),
+                epoch=epoch + 1,
+                num_samples=args.vis_samples,
+            )
 
         scheduler.step()
 
-        # save best
         if val_iou > best_iou:
             best_iou = val_iou
-            save_checkpoint(args.save_name, model, optimizer, scheduler, epoch, best_iou)
-            print(f"Saved best checkpoint to {args.save_name} (mIoU: {best_iou:.4f})")
+            save_checkpoint(checkpoint_path, model, optimizer, scheduler, epoch, best_iou)
+            print(f"Saved best checkpoint to {checkpoint_path} (mIoU: {best_iou:.4f})")
 
     print("Training complete.")
 

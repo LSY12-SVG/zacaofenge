@@ -21,6 +21,10 @@ models/*.pth
 # Large generated visual outputs
 results/*.png
 *.png
+runs/
+results/train_*.log
+results/train_*.err
+results/training_metrics*.csv
 
 # OS
 Desktop.ini

@@ -1,0 +1,102 @@
+common:
+  data_dir: Combined_Dataset
+  epochs: 60
+  batch_size: 8
+  lr: 0.0001
+  backbone: convnext_tiny
+  save_dir: runs
+  seed: 42
+  class_stat_mode: random
+  class_stat_samples: 500
+  max_fac_tries: 3
+  vis_every: 20
+  vis_samples: 4
+  estimate_fps: false
+
+experiments:
+  - name: unet
+    arch: unet
+    backbone: resnet34
+    fac: false
+    edge_weight: 0
+    cons_weight: 0
+    dsdf_mode: none
+    no_aug: false
+
+  - name: deeplabv3plus
+    arch: deeplabv3plus
+    backbone: resnet34
+    fac: false
+    edge_weight: 0
+    cons_weight: 0
+    dsdf_mode: none
+    no_aug: false
+
+  - name: segformer_b0
+    arch: segformerb0
+    backbone: mit_b0
+    fac: false
+    edge_weight: 0
+    cons_weight: 0
+    dsdf_mode: none
+    no_aug: false
+
+  - name: srdnet
+    arch: srdnet
+    backbone: convnext_tiny
+    fac: true
+    edge_weight: 0
+    cons_weight: 0
+    dsdf_mode: none
+    no_aug: false
+
+  - name: fpn_base
+    arch: fpn
+    fac: false
+    edge_weight: 0
+    cons_weight: 0
+    dsdf_mode: none
+    no_aug: false
+
+  - name: fpn_fac
+    arch: fpn
+    fac: true
+    edge_weight: 0
+    cons_weight: 0
+    dsdf_mode: none
+    no_aug: false
+
+  - name: fpn_fac_tsbr
+    arch: hfa
+    fac: true
+    edge_weight: 0.5
+    cons_weight: 0
+    dsdf_mode: none
+    no_aug: false
+
+  - name: hfa_logits
+    arch: hfa
+    fac: true
+    edge_weight: 0.5
+    cons_weight: 0
+    dsdf_mode: logits
+    no_aug: false
+
+  - name: hfa_feature
+    arch: hfa
+    fac: true
+    edge_weight: 0.5
+    cons_weight: 0
+    dsdf_mode: feature
+    dsdf_levels: p2p3
+    no_aug: false
+
+  - name: hfa_full
+    arch: hfa
+    fac: true
+    edge_weight: 0.5
+    cons_weight: 0.1
+    cons_warmup_epochs: 10
+    dsdf_mode: feature
+    dsdf_levels: p2p3
+    no_aug: false

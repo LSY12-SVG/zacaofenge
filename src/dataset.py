@@ -25,7 +25,8 @@ class WeedDataset(Dataset):
         fg_prob=0.7,
         enable_fac=True,
         class_stat_mode="random",
-        class_stat_samples=500
+        class_stat_samples=500,
+        max_fac_tries=3
     ):
         self.root_dir = root_dir
         self.mode = mode
@@ -40,6 +41,10 @@ class WeedDataset(Dataset):
         self.current_epoch = 0
         self.class_stat_mode = str(class_stat_mode).lower()
         self.class_stat_samples = int(class_stat_samples)
+        self.max_fac_tries = int(max_fac_tries)
+        self._fac_attempt_sum = 0.0
+        self._fac_fg_ratio_sum = 0.0
+        self._fac_sample_count = 0
 
         root_path = Path(root_dir)
 
@@ -113,6 +118,25 @@ class WeedDataset(Dataset):
 
     def set_epoch(self, epoch: int):
         self.current_epoch = int(epoch)
+        self.reset_epoch_stats()
+
+    def reset_epoch_stats(self):
+        self._fac_attempt_sum = 0.0
+        self._fac_fg_ratio_sum = 0.0
+        self._fac_sample_count = 0
+
+    def get_epoch_stats(self):
+        if self._fac_sample_count == 0:
+            return {
+                "fac_avg_attempts": 0.0,
+                "fac_avg_fg_ratio": 0.0,
+                "fac_samples": 0
+            }
+        return {
+            "fac_avg_attempts": float(self._fac_attempt_sum / self._fac_sample_count),
+            "fac_avg_fg_ratio": float(self._fac_fg_ratio_sum / self._fac_sample_count),
+            "fac_samples": int(self._fac_sample_count)
+        }
 
     def _fac_min_fg_ratio(self) -> float:
         # 默认课程：易→难
@@ -148,37 +172,12 @@ class WeedDataset(Dataset):
             stat_desc = f"随机采样 {n}/{total_masks}"
 
         for idx in sample_idx:
-            mp = self.masks[int(idx)]
+            idx = int(idx)
+            mp = self.masks[idx]
             try:
-                # 统计阶段用 cv2.imread 更稳
-                mask = cv2.imread(mp, cv2.IMREAD_GRAYSCALE)
-                if mask is None:
-                    continue
-
-                # === 关键：统计时也做映射 ===
-                # 1) 如果是 cofly 数据集：所有非零都当 weed(2)
-                if self.dataset_type == "cofly":
-                    mask = np.where(mask > 0, 2, 0).astype(np.uint8)
-
-                # 2) combined 数据集里，文件名前缀 cofly_ 也按 cofly 规则映射
-                elif self.dataset_type == "combined":
-                    # mp 是 mask_path，去找对应 image 名字最稳：mask 文件名与 image 同名
-                    name = Path(mp).name
-                    if name.startswith("cofly_"):
-                        mask = np.where(mask > 0, 2, 0).astype(np.uint8)
-
-                # 3) 额外兜底：有些数据用 255/128 做标签
-                #   - {0,255}：把 255 当 weed(2)
-                #   - {0,128,255}：128->crop(1), 255->weed(2)
-                u = np.unique(mask)
-                if u.max() > 2:
-                    if set(u.tolist()) <= {0, 255}:
-                        mask = np.where(mask == 255, 2, 0).astype(np.uint8)
-                    elif set(u.tolist()) <= {0, 128, 255}:
-                        mask2 = np.zeros_like(mask, dtype=np.uint8)
-                        mask2[mask == 128] = 1
-                        mask2[mask == 255] = 2
-                        mask = mask2
+                img_path = self.images[idx]
+                mask = self._read_mask(mp)
+                mask = self._map_labels(img_path, mask)
 
                 for i in range(3):
                     hist[i] += np.sum(mask == i)
@@ -333,6 +332,10 @@ class WeedDataset(Dataset):
 
         # 如果原图本身比 crop_size 小，则直接 resize
         if h < s or w < s:
+            fg_ratio = float((mask > 0).mean())
+            self._fac_attempt_sum += 0.0
+            self._fac_fg_ratio_sum += fg_ratio
+            self._fac_sample_count += 1
             return image, mask
 
         min_fg = self._fac_min_fg_ratio()
@@ -343,20 +346,34 @@ class WeedDataset(Dataset):
             idx = np.random.randint(0, fg[0].size)
             cy, cx = int(fg[0][idx]), int(fg[1][idx])
             img_c, mask_c = self._random_crop(image, mask, cx, cy)
-            # 前景比例不够时，多尝试几次
-            for _ in range(10):
+            # 前景比例不够时，限制尝试次数避免拖慢
+            attempts = 1
+            for _ in range(max(self.max_fac_tries - 1, 0)):
                 fg_ratio = (mask_c > 0).mean()
                 if fg_ratio >= min_fg:
+                    self._fac_attempt_sum += attempts
+                    self._fac_fg_ratio_sum += float(fg_ratio)
+                    self._fac_sample_count += 1
                     return img_c, mask_c
+                attempts += 1
                 idx = np.random.randint(0, fg[0].size)
                 cy, cx = int(fg[0][idx]), int(fg[1][idx])
                 img_c, mask_c = self._random_crop(image, mask, cx, cy)
+            fg_ratio = (mask_c > 0).mean()
+            self._fac_attempt_sum += attempts
+            self._fac_fg_ratio_sum += float(fg_ratio)
+            self._fac_sample_count += 1
             return img_c, mask_c
 
         # fallback: random crop
         cx = np.random.randint(s // 2, w - s // 2)
         cy = np.random.randint(s // 2, h - s // 2)
-        return self._random_crop(image, mask, cx, cy)
+        img_c, mask_c = self._random_crop(image, mask, cx, cy)
+        fg_ratio = (mask_c > 0).mean()
+        self._fac_attempt_sum += 0.0
+        self._fac_fg_ratio_sum += float(fg_ratio)
+        self._fac_sample_count += 1
+        return img_c, mask_c
 
     def __getitem__(self, idx):
         img_path = self.images[idx]
@@ -371,14 +388,6 @@ class WeedDataset(Dataset):
         if u.size > 0 and u.max() > 2:
             raise RuntimeError(f"Invalid label {u.max()} in {mask_path}. Expected 0/1/2.")
 
-        # P1.1 定位 "Crop 为 0" 的根因（10 分钟）
-        if self.mode == "train" and np.random.rand() < 0.002:
-            print(f"[DBG] mask unique: {u[:20]}, max: {u.max()}, min: {u.min()}, path: {Path(mask_path).name}")
-            # 你会看到三种情况之一
-            # 情况 A ：unique 只有 {0,2} → 训练集确实没有 crop 类（或者样本来源多是 cofly/weed-only）
-            # 情况 B ：unique 有 {0,128,255} 或 {0,255} → 你的 crop/weed 是颜色值，不是 1/2
-            # 情况 C ：unique 有 {0,1,2} ，但统计里 crop=0 → 说明统计阶段仍未对某部分样本做正确映射（比如 train 的部分 mask 不是同一编码）
-        
         # FAC crop (train only)
         if self.enable_fac:
             image, mask = self._fac_crop(image, mask)
