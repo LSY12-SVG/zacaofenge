@@ -6,6 +6,10 @@
 - `R3.1` feature-space DSDF（`P2/P3`）
 - `R8.2` 一键跑完整对比 + 消融并自动汇总
 
+补充资料：
+- 汇报稿：`PROJECT_TRAINING_REPORT_PLAN.md`
+- 命令清单：`training_commands.md`
+
 ## 1. 核心架构
 
 统一入口模型在 [src/models/research_hfa.py](E:/温室无人机巡检系统/杂草/src/models/research_hfa.py)：
