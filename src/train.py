@@ -306,6 +306,13 @@ def main():
         if not tb_logdir:
             tb_logdir = os.path.join(run_dir, "tb") if run_dir else "runs/tb"
         try:
+            tb_logdir.encode("ascii")
+        except UnicodeEncodeError:
+            safe_root = os.path.join("C:\\", "tb_logs")
+            run_name = os.path.basename(run_dir) if run_dir else "default_run"
+            tb_logdir = os.path.join(safe_root, run_name)
+            print(f"Warning: non-ASCII log path detected, redirect TensorBoard logs to: {tb_logdir}")
+        try:
             with contextlib.redirect_stderr(io.StringIO()):
                 from torch.utils.tensorboard import SummaryWriter
             if os.path.exists(tb_logdir) and (not os.path.isdir(tb_logdir)):
