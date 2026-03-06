@@ -3,6 +3,8 @@ import csv
 import os
 import random
 import time
+import io
+import contextlib
 
 import cv2
 import numpy as np
@@ -246,6 +248,8 @@ def main():
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--metrics_csv", type=str, default="")
     parser.add_argument("--estimate_fps", action="store_true")
+    parser.add_argument("--tensorboard", action="store_true")
+    parser.add_argument("--tb_logdir", type=str, default="")
     parser.add_argument("--fps_h", type=int, default=480)
     parser.add_argument("--fps_w", type=int, default=480)
     parser.add_argument("--fps_batch_size", type=int, default=1)
@@ -295,6 +299,25 @@ def main():
 
     os.makedirs(os.path.dirname(metrics_csv) or ".", exist_ok=True)
     ensure_csv_header(metrics_csv)
+
+    writer = None
+    if args.tensorboard:
+        tb_logdir = args.tb_logdir.strip()
+        if not tb_logdir:
+            tb_logdir = os.path.join(run_dir, "tb") if run_dir else "runs/tb"
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                from torch.utils.tensorboard import SummaryWriter
+            if os.path.exists(tb_logdir) and (not os.path.isdir(tb_logdir)):
+                print(f"Warning: tb_logdir exists but is a file: {tb_logdir}. Disable TensorBoard for this run.")
+            else:
+                os.makedirs(tb_logdir, exist_ok=True)
+                writer = SummaryWriter(log_dir=tb_logdir)
+                print(f"TensorBoard logging enabled: {tb_logdir}")
+        except Exception as e:
+            writer = None
+            print(f"Warning: failed to initialize TensorBoard writer: {e}")
+            print("Continue training without TensorBoard.")
 
     train_set = WeedDataset(
         args.data_dir,
@@ -555,6 +578,23 @@ def main():
             ],
         )
 
+        if writer is not None:
+            writer.add_scalar("train/loss", train_loss, epoch + 1)
+            writer.add_scalar("val/loss", val_loss, epoch + 1)
+            writer.add_scalar("val/miou", val_iou, epoch + 1)
+            writer.add_scalar("val/iou_bg", per_iou[0], epoch + 1)
+            writer.add_scalar("val/iou_crop", per_iou[1], epoch + 1)
+            writer.add_scalar("val/iou_weed", per_iou[2], epoch + 1)
+            writer.add_scalar("val/weed_recall", weed_recall, epoch + 1)
+            writer.add_scalar("val/boundary_f1", boundary_f1, epoch + 1)
+            writer.add_scalar("optim/lr", lr_now, epoch + 1)
+            writer.add_scalar("optim/cons_weight", active_cons_weight, epoch + 1)
+            writer.add_scalar("fac/avg_fg_ratio", fac_stats["fac_avg_fg_ratio"], epoch + 1)
+            writer.add_scalar("fac/avg_attempts", fac_stats["fac_avg_attempts"], epoch + 1)
+            writer.add_scalar("val/weed_tp", weed_tp_sum, epoch + 1)
+            writer.add_scalar("val/weed_fn", weed_fn_sum, epoch + 1)
+            writer.add_scalar("val/weed_fp", weed_fp_sum, epoch + 1)
+
         if args.vis_every > 0 and run_dir and (((epoch + 1) % args.vis_every == 0) or (epoch + 1 == args.epochs)):
             save_prediction_visuals(
                 model=model,
@@ -574,6 +614,8 @@ def main():
             print(f"Saved best checkpoint to {checkpoint_path} (mIoU: {best_iou:.4f})")
 
     print("Training complete.")
+    if writer is not None:
+        writer.close()
 
 
 if __name__ == "__main__":

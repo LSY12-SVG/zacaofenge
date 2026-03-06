@@ -164,6 +164,26 @@ python src/train.py --data_dir Combined_Dataset --arch hfa --bf_radius 2 --run_d
 python src/train.py --data_dir Combined_Dataset --arch deeplabv3plus --backbone resnet34 --no_fac --edge_weight 0 --cons_weight 0 --run_dir runs/fair_deeplabv3plus
 ```
 
+### 7.5 TensorBoard 实时面板
+
+训练时启用 TB 日志：
+
+```bash
+python -u src/train.py --data_dir Combined_Dataset --arch hfa --run_dir runs/hfa_full --tensorboard
+```
+
+启动 Web 面板（PowerShell）：
+
+```powershell
+./scripts/start_tensorboard.ps1 -Logdir runs -Port 6006
+```
+
+浏览器打开：
+
+```text
+http://127.0.0.1:6006
+```
+
 ## 10. 说明
 
 - 当前已停止旧训练进程，避免实验污染。
