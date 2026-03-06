@@ -13,7 +13,7 @@
 - **Backbone**: ConvNeXt-Tiny (预训练)
 - **特点**: 结构残差解耦，多尺度特征融合
 - **参数量**: ~40M
-- **文件**: `models/srdnet.py`
+- **文件**: `src/models/srdnet.py`
 
 #### HFA-Net (Hybrid Feature Aggregation Network) 🆕
 - **Backbone**: ConvNeXt-Tiny (预训练)
@@ -25,7 +25,7 @@
   - **EdgeHead (TSBR)**: 边界细化分支
     - 输出：1 通道 edge map
 - **参数量**: 42.96M
-- **文件**: `src/hfa_model.py`
+- **文件**: `src/models/research_hfa.py`
 - **设计**: 无侵入式 wrapper，兼容现有 SRDNet
 
 ---
@@ -168,14 +168,14 @@
 ## 📁 文件清单
 
 ### 核心文件
-- `src/hfa_model.py` - HFA-Net 模型实现 🆕
+- `src/models/research_hfa.py` - HFA-Net 模型实现 🆕
 - `src/loss.py` - 损失函数（优化版）✅
 - `src/dataset.py` - 数据集（FAC 支持）✅
 - `src/train.py` - 训练流程（HFA 支持）✅
-- `models/srdnet.py` - SRDNet 模型
+- `src/models/srdnet.py` - SRDNet 模型
 
 ### 辅助文件
-- `training_commands.md` - 训练命令参考
+- `docs/guides/training_commands.md` - 训练命令参考
 - `.trae/documents/HFA-Net_Implementation_Plan.md` - 实施计划
 
 ---
@@ -323,3 +323,4 @@ python src\train.py --data_dir "Combined_Dataset" \
 **实施完成时间**: 2026-03-04
 **状态**: ✅ 所有核心功能已完成并测试通过
 **训练状态**: 🔄 HFA-Net 训练中
+

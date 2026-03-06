@@ -224,7 +224,7 @@ python src/predict.py \
 │   ├── loss.py                    # 损失函数 (含 SRDNetLoss)
 │   └── ...
 ├── requirements.txt               # 依赖文件
-├── test_srdnet.py                 # 测试脚本
+├── tools/tests/test_srdnet.py      # 测试脚本
 └── .trae/documents/
     └── SRDNet_Implementation_Plan.md  # 实现计划
 ```
@@ -279,3 +279,4 @@ python src/train.py --data_dir "Combined_Dataset" --model srdnet --backbone conv
 ```
 
 祝训练顺利！🚀
+

@@ -7,8 +7,8 @@
 - `R8.2` 一键跑完整对比 + 消融并自动汇总
 
 补充资料：
-- 汇报稿：`PROJECT_TRAINING_REPORT_PLAN.md`
-- 命令清单：`training_commands.md`
+- 汇报稿：`docs/reports/PROJECT_TRAINING_REPORT_PLAN.md`
+- 命令清单：`docs/guides/training_commands.md`
 
 ## 1. 核心架构
 
@@ -192,3 +192,4 @@ http://127.0.0.1:6006
 
 - 当前已停止旧训练进程，避免实验污染。
 - 训练恢复请使用 `--resume <best.ckpt>`，checkpoint 已含 `optimizer/scheduler/epoch/best_iou`。
+

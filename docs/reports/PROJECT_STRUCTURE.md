@@ -28,9 +28,9 @@
 | 文件 | 功能 | 说明 |
 |------|------|------|
 | [`dataset.py`](src/dataset.py) | **数据集加载器** | 支持 Tobacco、CoFly、合并数据集 |
-| [`merge_datasets.py`](merge_datasets.py) | 数据集合并 | 合并 Tobacco 和 CoFly 数据集 |
-| [`check_cofly_format.py`](check_cofly_format.py) | 数据检查 | 检查 CoFly 数据集格式 |
-| [`check_cofly_labels.py`](check_cofly_labels.py) | 标签检查 | 检查 CoFly 标签分布 |
+| [`merge_datasets.py`](tools/data/merge_datasets.py) | 数据集合并 | 合并 Tobacco 和 CoFly 数据集 |
+| [`check_cofly_format.py`](tools/data/check_cofly_format.py) | 数据检查 | 检查 CoFly 数据集格式 |
+| [`check_cofly_labels.py`](tools/data/check_cofly_labels.py) | 标签检查 | 检查 CoFly 标签分布 |
 
 ### 1.3 可视化相关
 | 文件 | 功能 | 说明 |
@@ -164,13 +164,13 @@ CoFly-WeedDB/
 
 | 文件 | 功能 | 状态 |
 |------|------|------|
-| [`test_srdnet.py`](test_srdnet.py) | SRDNet 完整测试 | 测试前向传播、作物 mask 提取 |
-| [`test_srdnet_simple.py`](test_srdnet_simple.py) | SRDNet 简化测试 | 快速测试导入和创建 |
-| [`test_import.py`](test_import.py) | 导入测试 | 测试各模块导入 |
-| [`test_cpu.py`](test_cpu.py) | CPU 模式测试 | 禁用 CUDA 测试 |
-| [`debug_import.py`](debug_import.py) | 导入调试 | 详细记录导入时间 |
-| [`debug_train.py`](debug_train.py) | 训练调试 | 分步诊断训练流程 |
-| [`quick_test.py`](quick_test.py) | 快速测试 | 简化版 SRDNet 测试 |
+| [`test_srdnet.py`](tools/tests/test_srdnet.py) | SRDNet 完整测试 | 测试前向传播、作物 mask 提取 |
+| [`test_srdnet_simple.py`](tools/tests/test_srdnet_simple.py) | SRDNet 简化测试 | 快速测试导入和创建 |
+| [`test_import.py`](tools/tests/test_import.py) | 导入测试 | 测试各模块导入 |
+| [`test_cpu.py`](tools/tests/test_cpu.py) | CPU 模式测试 | 禁用 CUDA 测试 |
+| [`debug_import.py`](tools/debug/debug_import.py) | 导入调试 | 详细记录导入时间 |
+| [`debug_train.py`](tools/debug/debug_train.py) | 训练调试 | 分步诊断训练流程 |
+| [`quick_test.py`](tools/debug/quick_test.py) | 快速测试 | 简化版 SRDNet 测试 |
 
 ---
 
@@ -178,8 +178,8 @@ CoFly-WeedDB/
 
 | 文件 | 类型 | 内容 |
 |------|------|------|
-| [`SRDNet_README.md`](SRDNet_README.md) | **使用指南** | SRDNet 完整使用说明 |
-| [`TRAINING_GUIDE.md`](TRAINING_GUIDE.md) | 训练指南 | 合并数据集训练教程 |
+| [`SRDNet_README.md`](docs/guides/SRDNet_README.md) | **使用指南** | SRDNet 完整使用说明 |
+| [`TRAINING_GUIDE.md`](docs/guides/TRAINING_GUIDE.md) | 训练指南 | 合并数据集训练教程 |
 | [`.trae/documents/SRDNet_Implementation_Plan.md`](.trae/documents/SRDNet_Implementation_Plan.md) | **实现计划** | SRDNet 详细设计和实现步骤 |
 
 ---
@@ -196,9 +196,9 @@ CoFly-WeedDB/
 ## 8️⃣ 辅助工具
 
 ### 8.1 数据预处理
-- [`merge_datasets.py`](merge_datasets.py) - 合并 Tobacco 和 CoFly 数据集
-- [`check_cofly_format.py`](check_cofly_format.py) - 检查 CoFly 数据格式
-- [`check_cofly_labels.py`](check_cofly_labels.py) - 分析 CoFly 标签分布
+- [`merge_datasets.py`](tools/data/merge_datasets.py) - 合并 Tobacco 和 CoFly 数据集
+- [`check_cofly_format.py`](tools/data/check_cofly_format.py) - 检查 CoFly 数据格式
+- [`check_cofly_labels.py`](tools/data/check_cofly_labels.py) - 分析 CoFly 标签分布
 
 ### 8.2 可视化
 - [`visualize.py`](src/visualize.py) - 预测结果可视化
@@ -216,7 +216,7 @@ CoFly-WeedDB/
 pip install -r requirements.txt
 
 # 2. 测试 SRDNet 模型
-python test_srdnet_simple.py
+python tools/tests/test_srdnet_simple.py
 
 # 3. 开始训练
 python src/train.py \
@@ -284,13 +284,13 @@ python src/predict.py \
 │   └── CoFly-WeedDB.zip
 │
 ├── 🧪 测试脚本
-│   ├── test_srdnet.py, test_srdnet_simple.py    # SRDNet 测试
-│   ├── test_import.py, test_cpu.py              # 导入测试
-│   └── debug_import.py, debug_train.py          # 调试脚本
+│   ├── tools/tests/test_srdnet.py, test_srdnet_simple.py    # SRDNet 测试
+│   ├── tools/tests/test_import.py, test_cpu.py              # 导入测试
+│   └── tools/debug/debug_import.py, debug_train.py          # 调试脚本
 │
 ├── 📖 文档
-│   ├── SRDNet_README.md                         # SRDNet 使用指南
-│   ├── TRAINING_GUIDE.md                        # 训练指南
+│   ├── docs/guides/SRDNet_README.md             # SRDNet 使用指南
+│   ├── docs/guides/TRAINING_GUIDE.md            # 训练指南
 │   └── .trae/documents/SRDNet_Implementation_Plan.md
 │
 ├── 🛠️ 配置
@@ -298,7 +298,7 @@ python src/predict.py \
 │   └── .venv/                                   # 虚拟环境
 │
 └── 🔧 辅助工具
-    ├── merge_datasets.py                        # 数据合并
+    ├── tools/data/merge_datasets.py                        # 数据合并
     ├── check_cofly_*.py                         # 数据检查
     └── visualize.py, draw_architecture.py       # 可视化
 ```
@@ -322,7 +322,7 @@ python src/predict.py \
   - [`decoder.py`](src/models/decoder.py)
 
 ### 文档相关
-- **使用指南**: [`SRDNet_README.md`](SRDNet_README.md)
+- **使用指南**: [`SRDNet_README.md`](docs/guides/SRDNet_README.md)
 - **实现计划**: [`.trae/documents/SRDNet_Implementation_Plan.md`](.trae/documents/SRDNet_Implementation_Plan.md)
 
 ---
@@ -345,3 +345,5 @@ python src/predict.py \
 
 **最后更新**: 2026-03-04  
 **项目状态**: SRDNet 已实现完成，等待训练验证
+
+
