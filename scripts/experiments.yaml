@@ -3,100 +3,125 @@ common:
   epochs: 60
   batch_size: 8
   lr: 0.0001
-  backbone: convnext_tiny
-  save_dir: runs
   seed: 42
+  save_dir: runs
   class_stat_mode: random
   class_stat_samples: 500
   max_fac_tries: 3
   vis_every: 20
   vis_samples: 4
-  estimate_fps: false
+  estimate_fps: true
+  fps_h: 480
+  fps_w: 480
+  fps_batch_size: 1
+  fps_warmup_iters: 20
+  fps_timed_iters: 50
 
 experiments:
-  - name: unet
+  # =========================
+  # Fair Baselines (Table 1)
+  # Same training strategy:
+  # no FAC, no consistency, same epochs/lr/scheduler
+  # =========================
+  - name: fair_unet
     arch: unet
     backbone: resnet34
     fac: false
     edge_weight: 0
     cons_weight: 0
     dsdf_mode: none
-    no_aug: false
 
-  - name: deeplabv3plus
+  - name: fair_deeplabv3plus
     arch: deeplabv3plus
     backbone: resnet34
     fac: false
     edge_weight: 0
     cons_weight: 0
     dsdf_mode: none
-    no_aug: false
 
-  - name: segformer_b0
+  - name: fair_segformer_b0
     arch: segformerb0
     backbone: mit_b0
     fac: false
     edge_weight: 0
     cons_weight: 0
     dsdf_mode: none
-    no_aug: false
 
-  - name: srdnet
+  - name: fair_srdnet
     arch: srdnet
+    backbone: convnext_tiny
+    fac: false
+    edge_weight: 0
+    cons_weight: 0
+    dsdf_mode: none
+
+  - name: fair_fpn
+    arch: fpn
+    backbone: convnext_tiny
+    fac: false
+    edge_weight: 0
+    cons_weight: 0
+    dsdf_mode: none
+
+  - name: fair_hfa
+    arch: hfa
+    backbone: convnext_tiny
+    fac: false
+    edge_weight: 0.5
+    cons_weight: 0
+    dsdf_mode: feature
+    dsdf_levels: p2p3
+
+  # =========================
+  # Enhanced / Ablation Study
+  # =========================
+  - name: ab_fpn_base
+    arch: fpn
+    backbone: convnext_tiny
+    fac: false
+    edge_weight: 0
+    cons_weight: 0
+    dsdf_mode: none
+
+  - name: ab_fpn_fac
+    arch: fpn
     backbone: convnext_tiny
     fac: true
     edge_weight: 0
     cons_weight: 0
     dsdf_mode: none
-    no_aug: false
 
-  - name: fpn_base
-    arch: fpn
-    fac: false
-    edge_weight: 0
-    cons_weight: 0
-    dsdf_mode: none
-    no_aug: false
-
-  - name: fpn_fac
-    arch: fpn
-    fac: true
-    edge_weight: 0
-    cons_weight: 0
-    dsdf_mode: none
-    no_aug: false
-
-  - name: fpn_fac_tsbr
+  - name: ab_fpn_fac_tsbr
     arch: hfa
+    backbone: convnext_tiny
     fac: true
     edge_weight: 0.5
     cons_weight: 0
     dsdf_mode: none
-    no_aug: false
 
-  - name: hfa_logits
+  - name: ab_hfa_logits
     arch: hfa
+    backbone: convnext_tiny
     fac: true
     edge_weight: 0.5
     cons_weight: 0
     dsdf_mode: logits
-    no_aug: false
 
-  - name: hfa_feature
+  - name: ab_hfa_feature
     arch: hfa
+    backbone: convnext_tiny
     fac: true
     edge_weight: 0.5
     cons_weight: 0
     dsdf_mode: feature
     dsdf_levels: p2p3
-    no_aug: false
 
-  - name: hfa_full
+  - name: ab_hfa_full
     arch: hfa
+    backbone: convnext_tiny
     fac: true
     edge_weight: 0.5
     cons_weight: 0.1
     cons_warmup_epochs: 10
     dsdf_mode: feature
     dsdf_levels: p2p3
-    no_aug: false

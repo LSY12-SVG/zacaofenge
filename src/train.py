@@ -2,6 +2,7 @@ import argparse
 import csv
 import os
 import random
+import time
 
 import cv2
 import numpy as np
@@ -50,16 +51,35 @@ def calculate_weed_recall(logits, true_mask, weed_cls=2):
     return float((tp / denom).item())
 
 
+def calculate_weed_stats(logits, true_mask, weed_cls=2):
+    pred = torch.argmax(logits, dim=1)
+    tp = int(((pred == weed_cls) & (true_mask == weed_cls)).sum().item())
+    fn = int(((pred != weed_cls) & (true_mask == weed_cls)).sum().item())
+    fp = int(((pred == weed_cls) & (true_mask != weed_cls)).sum().item())
+    return tp, fn, fp
+
+
 def calculate_boundary_f1(logits, true_mask, radius=1):
     pred = torch.argmax(logits, dim=1)
-    pred_edge = mask_to_edge(pred, radius=radius)
-    gt_edge = mask_to_edge(true_mask, radius=radius)
-    tp = (pred_edge * gt_edge).sum().float()
-    fp = (pred_edge * (1.0 - gt_edge)).sum().float()
-    fn = ((1.0 - pred_edge) * gt_edge).sum().float()
-    precision = tp / (tp + fp + 1e-6)
-    recall = tp / (tp + fn + 1e-6)
-    f1 = 2 * precision * recall / (precision + recall + 1e-6)
+    pred_edge = (mask_to_edge(pred, radius=1) > 0.5).float()
+    gt_edge = (mask_to_edge(true_mask, radius=1) > 0.5).float()
+
+    if radius > 0:
+        k = 2 * radius + 1
+        pred_dil = (torch.nn.functional.max_pool2d(pred_edge, kernel_size=k, stride=1, padding=radius) > 0).float()
+        gt_dil = (torch.nn.functional.max_pool2d(gt_edge, kernel_size=k, stride=1, padding=radius) > 0).float()
+    else:
+        pred_dil = pred_edge
+        gt_dil = gt_edge
+
+    matched_pred = pred_edge * gt_dil
+    matched_gt = gt_edge * pred_dil
+    tp_p = matched_pred.sum().float()
+    all_p = pred_edge.sum().float()
+    all_g = gt_edge.sum().float()
+    precision = tp_p / (all_p + 1e-6)
+    recall = matched_gt.sum().float() / (all_g + 1e-6)
+    f1 = 2.0 * precision * recall / (precision + recall + 1e-6)
     return float(f1.item())
 
 
@@ -112,6 +132,9 @@ def ensure_csv_header(path):
         "iou_crop",
         "iou_weed",
         "weed_recall",
+        "weed_tp",
+        "weed_fn",
+        "weed_fp",
         "boundary_f1",
         "lr",
         "cons_weight",
@@ -165,6 +188,23 @@ def model_forward(model, images, arch):
     return out, None, out
 
 
+def benchmark_fps(model, arch, device, h=480, w=480, batch_size=1, warmup=20, iters=50):
+    model.eval()
+    x = torch.randn(batch_size, 3, h, w, device=device)
+    with torch.no_grad():
+        for _ in range(warmup):
+            _ = model_forward(model, x, arch)
+        if device == "cuda":
+            torch.cuda.synchronize()
+        t0 = time.time()
+        for _ in range(iters):
+            _ = model_forward(model, x, arch)
+        if device == "cuda":
+            torch.cuda.synchronize()
+        dt = time.time() - t0
+    return float((iters * batch_size) / max(dt, 1e-6))
+
+
 def save_prediction_visuals(model, val_set, device, arch, out_dir, epoch, num_samples=4):
     os.makedirs(out_dir, exist_ok=True)
     model.eval()
@@ -206,6 +246,11 @@ def main():
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--metrics_csv", type=str, default="")
     parser.add_argument("--estimate_fps", action="store_true")
+    parser.add_argument("--fps_h", type=int, default=480)
+    parser.add_argument("--fps_w", type=int, default=480)
+    parser.add_argument("--fps_batch_size", type=int, default=1)
+    parser.add_argument("--fps_warmup_iters", type=int, default=20)
+    parser.add_argument("--fps_timed_iters", type=int, default=50)
 
     parser.add_argument("--crop_size", type=int, default=512)
     parser.add_argument("--fg_prob", type=float, default=0.7)
@@ -320,12 +365,36 @@ def main():
     print(f"Model: {args.arch}, Backbone: {args.backbone}, Params: {total_params / 1e6:.2f}M")
 
     fps = None
-    if args.estimate_fps and hasattr(model, "estimate_fps"):
-        fps = model.estimate_fps(device=device)
+    if args.estimate_fps:
+        fps = benchmark_fps(
+            model=model,
+            arch=args.arch,
+            device=device,
+            h=args.fps_h,
+            w=args.fps_w,
+            batch_size=args.fps_batch_size,
+            warmup=args.fps_warmup_iters,
+            iters=args.fps_timed_iters,
+        )
         print(f"Estimated FPS: {fps:.2f}")
 
     if run_dir:
-        meta = {"params_million": round(total_params / 1e6, 4), "fps": fps if fps is not None else ""}
+        if device == "cuda":
+            device_name = torch.cuda.get_device_name(torch.cuda.current_device())
+        else:
+            device_name = "cpu"
+        meta = {
+            "params_million": round(total_params / 1e6, 4),
+            "fps": fps if fps is not None else "",
+            "device": device_name,
+            "device_type": device,
+            "input_size": [args.fps_h, args.fps_w],
+            "batch_size": args.fps_batch_size,
+            "warmup_iters": args.fps_warmup_iters,
+            "timed_iters": args.fps_timed_iters,
+            "torch_version": torch.__version__,
+            "cuda_version": torch.version.cuda if torch.version.cuda is not None else "",
+        }
         dump_config(os.path.join(run_dir, "model_meta.yaml"), meta)
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
@@ -399,8 +468,9 @@ def main():
         model.eval()
         val_loss = 0.0
         val_iou = 0.0
-        weed_recall_sum = 0.0
-        weed_recall_cnt = 0
+        weed_tp_sum = 0
+        weed_fn_sum = 0
+        weed_fp_sum = 0
         bf1_sum = 0.0
         per_sum = [0.0, 0.0, 0.0]
         per_cnt = [0, 0, 0]
@@ -420,10 +490,10 @@ def main():
 
                 miou, per = calculate_iou(logits, masks, num_classes=3)
                 val_iou += miou
-                wr = calculate_weed_recall(logits, masks)
-                if not np.isnan(wr):
-                    weed_recall_sum += wr
-                    weed_recall_cnt += 1
+                tp, fn, fp = calculate_weed_stats(logits, masks)
+                weed_tp_sum += tp
+                weed_fn_sum += fn
+                weed_fp_sum += fp
                 bf1_sum += calculate_boundary_f1(logits, masks, radius=args.bf_radius)
 
                 for i in range(3):
@@ -435,7 +505,7 @@ def main():
         val_loss /= max(len(val_loader), 1)
         val_iou /= max(len(val_loader), 1)
         per_iou = [per_sum[i] / max(per_cnt[i], 1) for i in range(3)]
-        weed_recall = weed_recall_sum / max(weed_recall_cnt, 1)
+        weed_recall = float(weed_tp_sum / max(weed_tp_sum + weed_fn_sum, 1))
         boundary_f1 = bf1_sum / max(len(val_loader), 1)
         fac_stats = (
             train_set.get_epoch_stats() if hasattr(train_set, "get_epoch_stats") else {
@@ -452,6 +522,7 @@ def main():
         print(f"  - Crop IoU:       {per_iou[1]:.4f}")
         print(f"  - Weed IoU:       {per_iou[2]:.4f}")
         print(f"  - Weed Recall:    {weed_recall:.4f}")
+        print(f"  - Weed TP/FN/FP:  {weed_tp_sum}/{weed_fn_sum}/{weed_fp_sum}")
         print(f"  - Boundary F1:    {boundary_f1:.4f}")
         print(f"  - LR:             {lr_now:.6g}")
         if args.arch == "hfa":
@@ -472,6 +543,9 @@ def main():
                 f"{per_iou[1]:.6f}",
                 f"{per_iou[2]:.6f}",
                 f"{weed_recall:.6f}",
+                weed_tp_sum,
+                weed_fn_sum,
+                weed_fp_sum,
                 f"{boundary_f1:.6f}",
                 f"{lr_now:.8f}",
                 f"{active_cons_weight:.6f}",
